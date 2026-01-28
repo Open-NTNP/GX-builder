@@ -1,67 +1,18 @@
-#!/usr/bin/env python3
-
+"""
+GUI code extracted from your original script.
+Imports helpers and constants from libs.lib.
+"""
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import json, os, hashlib, base64, shutil, zipfile
+import json, os, shutil, zipfile
 from functools import partial
 
-APP_TITLE = "GX Builder"
-
-# ---------- Presets / Enums ----------
-BROWSER_EVENT_PRESETS = [
-    "CLICK", "HOVER", "HOVER_UP", "TAB_INSERT", "TAB_CLOSE", "TAB_SLASH",
-    "SWITCH_TAB", "WINDOW_OPEN", "WINDOW_CLOSE", "LIMITER_ON", "LIMITER_OFF",
-    "FEATURE_SWITCH_ON", "FEATURE_SWITCH_OFF", "DOWNLOAD_START", "DOWNLOAD_FINISH",
-    "IMPORTANT_CLICK"
-]
-KEYBOARD_EVENT_PRESETS = [
-    "TYPING_LETTER", "TYPING_SPACE", "TYPING_ENTER", "TYPING_BACKSPACE", "TYPING_DELETE", "TYPING_TAB"
-]
-CURSOR_PRESETS = [
-    "POINTER", "HAND", "WAIT", "PROGRESS", "I_BEAM", "MOVE", "HELP",
-    "NORTH_RESIZE", "SOUTH_RESIZE", "EAST_RESIZE", "WEST_RESIZE",
-    "NORTH_EAST_SOUTH_WEST_RESIZE", "NORTH_WEST_SOUTH_EAST_RESIZE",
-    "ALIAS", "COPY", "NO_DROP", "GRAB", "GRABBING", "ZOOM_IN", "ZOOM_OUT"
-]
-
-
-def md5_bytes(b: bytes) -> str:
-    return hashlib.md5(b).hexdigest()
-
-def compute_payload_hash(file_map: dict) -> str:
-    """file_map: relpath -> abs path or bytes"""
-    m = hashlib.md5()
-    for rel in sorted(file_map.keys()):
-        src = file_map[rel]
-        try:
-            if isinstance(src, (bytes, bytearray)):
-                m.update(src)
-            else:
-                with open(src, "rb") as f:
-                    m.update(f.read())
-        except Exception:
-            continue
-    return m.hexdigest()
-
-def ensure_dir(path):
-    os.makedirs(path, exist_ok=True)
-
-def is_nonempty_list_of_dicts(x):
-    return isinstance(x, list) and len(x) > 0 and all(isinstance(i, dict) for i in x)
-
-def collect_referenced_paths_from_payload(payload):
-    referenced = set()
-    def walk(o):
-        if isinstance(o, dict):
-            for v in o.values(): walk(v)
-        elif isinstance(o, list):
-            for i in o: walk(i)
-        elif isinstance(o, str):
-            if "/" in o:
-                referenced.add(o)
-    walk(payload)
-    return referenced
-
+from .lib import (
+    APP_TITLE, THEME_STYLES, BROWSER_EVENT_PRESETS, KEYBOARD_EVENT_PRESETS,
+    CURSOR_PRESETS, md5_bytes, compute_payload_hash, ensure_dir,
+    is_nonempty_list_of_dicts, collect_referenced_paths_from_payload,
+    SILENT_MP3_BYTES
+)
 
 class GXModBuilder:
     def __init__(self, root):
@@ -69,12 +20,15 @@ class GXModBuilder:
         root.title(APP_TITLE)
         root.geometry("1180x820")
 
+        # Theme State
+        self.current_theme = "dark"  # Default to dark
+        self.style = ttk.Style()
+        self.style.theme_use('clam')
+
         # relpath -> src path or bytes
         self.files_to_include = {}
 
         # core data structure: mod payload (schema v2-ish)
-        # Initialize payload keys to empty lists for UI stability.
-        # These empty internal lists will NOT be included in the manifest unless the user populates them.
         payload_keys = [
             'app_icon','background_music','browser_sounds','keyboard_sounds','cursors','fonts',
             'mobile_image_overrides','splash_screen','theme','wallpaper','page_styles'
@@ -93,7 +47,69 @@ class GXModBuilder:
         }
 
         self.widgets = {}
+
+        self.create_toolbar()
+        
         self.build_ui()
+        self.apply_theme() # Initial theme
+
+    def create_toolbar(self):
+        """Creates the top bar with the Dark/Light toggle."""
+        toolbar = ttk.Frame(self.root)
+        toolbar.pack(side="top", fill="x", padx=5, pady=2)
+        
+        # Theme Toggle Button
+        self.theme_btn_text = tk.StringVar(value="Switch to Light Mode")
+        btn = ttk.Button(toolbar, textvariable=self.theme_btn_text, command=self.toggle_theme)
+        btn.pack(side="right", padx=5, pady=2)
+
+        ttk.Label(toolbar, text=APP_TITLE, font=("Helvetica", 12, "bold")).pack(side="left", padx=5)
+
+    def toggle_theme(self):
+        """Switches between Dark and Light mode and updates the UI."""
+        if self.current_theme == "dark":
+            self.current_theme = "light"
+            self.theme_btn_text.set("Switch to Dark Mode")
+        else:
+            self.current_theme = "dark"
+            self.theme_btn_text.set("Switch to Light Mode")
+        
+        self.apply_theme()
+
+    def apply_theme(self):
+        """Applies the color scheme to the root and ttk widgets."""
+        colors = THEME_STYLES[self.current_theme]
+
+        # Configure root window
+        self.root.configure(bg=colors["bg"])
+        
+        self.style.configure("TFrame", background=colors["bg"])
+        self.style.configure("TLabel", background=colors["bg"], foreground=colors["fg"])
+        self.style.configure("TButton", background=colors["input_bg"], foreground=colors["fg"], bordercolor=colors["fg"])
+        self.style.map("TButton", background=[('active', colors["select_bg"])], foreground=[('active', colors["select_fg"])])
+        
+        self.style.configure("TEntry", fieldbackground=colors["input_bg"], foreground=colors["fg"], insertcolor=colors["fg"])
+        
+        text_bg = colors["input_bg"]
+        text_fg = colors["fg"]
+        text_sel_bg = colors["select_bg"]
+        text_sel_fg = colors["select_fg"]
+
+        for name, widget in self.widgets.items():
+            if isinstance(widget, tk.Text):
+                widget.configure(bg=text_bg, fg=text_fg, insertbackground=text_fg, 
+                                selectbackground=text_sel_bg, selectforeground=text_sel_fg)
+            elif isinstance(widget, tk.Listbox):
+                widget.configure(bg=text_bg, fg=text_fg, selectbackground=text_sel_bg, selectforeground=text_sel_fg)
+
+        self.style.configure("TCheckbutton", background=colors["bg"], foreground=colors["fg"])
+        self.style.configure("TRadiobutton", background=colors["bg"], foreground=colors["fg"])
+        
+        self.style.configure("TNotebook", background=colors["bg"], borderwidth=0)
+        self.style.configure("TNotebook.Tab", background=colors["bg"], foreground=colors["fg"], padding=[10, 5])
+        self.style.map("TNotebook.Tab", 
+                       background=[("selected", colors["input_bg"]), ("active", colors["bg"])],
+                       expand=[("selected", [1, 1, 1, 0])])
 
     # ---------------- UI ----------------
     def build_ui(self):
@@ -341,7 +357,6 @@ class GXModBuilder:
     def add_tracks_to_bg_music(self):
         sel = self.widgets['bgmusic_list'].curselection()
         if not sel:
-            # helpful prompt: ask to create a set now
             if messagebox.askyesno("No set", "No music set selected. Create one now?"):
                 self.add_bg_music_set()
                 return
@@ -374,7 +389,6 @@ class GXModBuilder:
             return
         sel = lb.curselection()
         if not sel:
-            # offer to create a pack if none present
             if messagebox.askyesno("No pack", "No pack selected. Create a new pack now?"):
                 self.add_sound_pack(pack_key)
                 return
@@ -394,7 +408,6 @@ class GXModBuilder:
 
         files = filedialog.askopenfilenames(filetypes=[("Audio","*.wav *.mp3 *.ogg"),("All","*.*")])
         if not files:
-            # explicit user flow: insert silent filler only when user chose to proceed with empty selection
             if messagebox.askyesno("No files chosen", "No files were selected. Insert silent filler for this event?"):
                 silent_name = f"{dest_folder}/empty_{ev}.mp3"
                 self.files_to_include[silent_name] = SILENT_MP3_BYTES
@@ -451,7 +464,6 @@ class GXModBuilder:
         pack = self.data['mod']['payload']['cursors'][idx]
         files = filedialog.askopenfilenames(title="Select cursor files")
         if not files: return
-        # choose cursor type (preset combobox)
         ctype = self.choose_from_list("Cursor Type", CURSOR_PRESETS + ["-- Custom --"])
         if ctype == "-- Custom --":
             ctype = self.prompt_simple("Cursor type", "Type label (e.g. POINTER)")
@@ -564,7 +576,6 @@ class GXModBuilder:
     def edit_wallpaper(self):
         sel = self.widgets['wp_list'].curselection()
         if not sel:
-            # if none selected, offer to create one
             if messagebox.askyesno("No wallpaper", "No wallpaper entry selected. Create one now?"):
                 self.add_wallpaper()
                 return
@@ -617,7 +628,6 @@ class GXModBuilder:
 
     # Remove helper
     def remove_list_selection(self, payload_key):
-        # mapping between payload keys and listbox names
         mapping = {
             'app_icon': 'app_icon_list',
             'background_music': 'bgmusic_list',
@@ -646,7 +656,6 @@ class GXModBuilder:
             lst = self.data['mod']['payload'].get(payload_key)
             if isinstance(lst, list):
                 lst.pop(idx)
-                # If after removal the list is empty, remove the key entirely from payload to avoid empty arrays in manifest
                 if len(lst) == 0:
                     self.data['mod']['payload'].pop(payload_key, None)
             self.log_import(f"Removed {payload_key}[{idx}]")
@@ -694,14 +703,11 @@ class GXModBuilder:
 
         def register_if_exists(relpath):
             if not relpath or not isinstance(relpath, str): return False
-            # if absolute
             if os.path.isabs(relpath) and os.path.exists(relpath):
                 self.files_to_include[relpath] = relpath; return True
-            # try relative to manifest
             candidate = os.path.join(base_dir, relpath)
             if os.path.exists(candidate):
                 self.files_to_include[relpath] = candidate; return True
-            # basename fallback
             bn = os.path.basename(relpath)
             candidate2 = os.path.join(base_dir, bn)
             if os.path.exists(candidate2):
@@ -790,7 +796,7 @@ class GXModBuilder:
                 self.data['mod']['payload'].pop('cursors', None)
 
         # fonts
-        if 'fonts' in payload and isinstance(payload.get('fonts'), list):
+        if 'fonts' in payload and isinstance(payload.get('fonts', list)):
             self.data['mod']['payload'].setdefault('fonts', [])
             for fpack in payload.get('fonts', []):
                 if not isinstance(fpack, dict):
@@ -1242,12 +1248,3 @@ class GXModBuilder:
     # ---------- Small helpers ----------
     def choose_from_combobox(self, title, options):
         return self.choose_from_list(title, options)
-
-# ---------- Run ----------
-def main():
-    root = tk.Tk()
-    app = GXModBuilder(root)
-    root.mainloop()
-
-if __name__ == "__main__":
-    main()
